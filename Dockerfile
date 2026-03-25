@@ -4,11 +4,14 @@ FROM python:3.11-slim
 # Set folder kerja di dalam container
 WORKDIR /app
 
-# Install dependensi minimal
-RUN pip install streamlit
+# Salin requirements dulu agar caching pip bekerja efisien
+COPY requirements.txt .
 
-# Salin file aplikasi ke container
-COPY app.py .
+# Install semua dependensi
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Salin seluruh file aplikasi (termasuk app.py dan csv jika ada)
+COPY . .
 
 # Buka port default Streamlit
 EXPOSE 8501

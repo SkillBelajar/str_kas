@@ -1,138 +1,326 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+import os
+import uuid
+import json
+import hashlib
+from streamlit_quill import st_quill
 
-# --- CONFIGURATION & SESSION STATE ---
-st.set_page_config(page_title="SembakoPintar POS", layout="wide")
+# =========================
+# CONFIG
+# =========================
+st.set_page_config(layout="wide")
 
-if 'inventory' not in st.session_state:
-    # Dummy Data Inventory dengan Konversi Satuan
-    st.session_state.inventory = pd.DataFrame([
-        {"id": 1, "nama": "Beras Premium", "stok_pcs": 100, "min_stok": 20, "harga_modal": 10000, "harga_jual": 12000, "dus_ke_pcs": 10},
-        {"id": 2, "nama": "Minyak Goreng 1L", "stok_pcs": 15, "min_stok": 20, "harga_modal": 14000, "harga_jual": 16000, "dus_ke_pcs": 12}
-    ])
+DB_FILES = {
+    "users": "users.csv",
+    "classes": "classes.csv",
+    "materials": "materials.csv",
+    "progress": "progress.csv",
+    "enrollments": "enrollments.csv"
+}
 
-if 'cart' not in st.session_state:
-    st.session_state.cart = []
+# =========================
+# UTIL
+# =========================
+def hash_pw(p):
+    return hashlib.sha256(p.encode()).hexdigest()
 
-# --- FUNCTIONS ---
-def update_stok(idx, jumlah, mode="tambah"):
-    if mode == "tambah":
-        st.session_state.inventory.at[idx, 'stok_pcs'] += jumlah
-    else:
-        st.session_state.inventory.at[idx, 'stok_pcs'] -= jumlah
+@st.cache_data
+def load_df(key):
+    return pd.read_csv(DB_FILES[key])
 
-# --- SIDEBAR NAVIGATION ---
-menu = st.sidebar.selectbox("Navigasi", ["Dashboard", "Manajemen Stok", "Kasir (Transaksi)", "Laporan Laba Rugi"])
+def save_df(df, key):
+    df.to_csv(DB_FILES[key], index=False)
+    load_df.clear()
 
-# --- 1. DASHBOARD & ALERTS ---
-if menu == "Dashboard":
-    st.header("🚀 Dashboard Ringkasan")
-    
-    # Stock Alert Logic
-    low_stock = st.session_state.inventory[st.session_state.inventory['stok_pcs'] <= st.session_state.inventory['min_stok']]
-    if not low_stock.empty:
-        st.error(f"⚠️ **Alert Stok Menipis!** {len(low_stock)} barang butuh restock.")
-        st.dataframe(low_stock[['nama', 'stok_pcs', 'min_stok']])
+# =========================
+# INIT DB
+# =========================
+def init_db():
+    for key, file in DB_FILES.items():
+        if not os.path.exists(file):
+            if key == "users":
+                df = pd.DataFrame(
+                    [["guru", hash_pw("guru"), "Master Guru", "teacher"]],
+                    columns=["username", "password", "name", "role"]
+                )
+            elif key == "classes":
+                df = pd.DataFrame(columns=["id", "name", "desc", "code"])
+            elif key == "materials":
+                df = pd.DataFrame(columns=["id", "class_id", "order", "title", "content", "questions", "passing_grade"])
+            elif key == "progress":
+                df = pd.DataFrame(columns=["username", "class_id", "order", "score", "status"])
+            elif key == "enrollments":
+                df = pd.DataFrame(columns=["username", "class_id"])
+            df.to_csv(file, index=False)
 
-    col1, col2 = st.columns(2)
-    col1.metric("Total Produk", len(st.session_state.inventory))
-    col2.metric("Produk Kritis", len(low_stock))
+# =========================
+# AUTH
+# =========================
+def login_page():
+    st.title("🛡️ E-Learning Pro")
 
-# --- 2. MANAJEMEN STOK (CRUD + UoM) ---
-elif menu == "Manajemen Stok":
-    st.header("📦 Manajemen Stok & Konversi Satuan")
-    
-    tab1, tab2 = st.tabs(["Daftar Barang", "Tambah/Edit Barang"])
-    
+    tab1, tab2 = st.tabs(["Login", "Daftar"])
+
     with tab1:
-        st.subheader("Data Inventori")
-        edited_df = st.data_editor(st.session_state.inventory, num_rows="dynamic", key="inv_editor")
-        if st.button("Simpan Perubahan"):
-            st.session_state.inventory = edited_df
-            st.success("Data diperbarui!")
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+
+        if st.button("Login"):
+            users = load_df("users")
+            user = users[(users['username'] == u) & (users['password'] == hash_pw(p))]
+
+            if not user.empty:
+                st.session_state.user = user.iloc[0].to_dict()
+                st.rerun()
+            else:
+                st.error("Login gagal")
 
     with tab2:
-        with st.form("form_barang"):
-            nama = st.text_input("Nama Barang")
-            col_a, col_b = st.columns(2)
-            dus_ke_pcs = col_a.number_input("Konversi (1 Dus isi berapa Pcs?)", min_value=1, value=1)
-            stok_dus = col_b.number_input("Input Stok (Dalam Dus)", min_value=0)
-            
-            h_modal = st.number_input("Harga Modal per Pcs")
-            h_jual = st.number_input("Harga Jual per Pcs")
-            min_s = st.number_input("Batas Stok Minimum", value=10)
-            
-            if st.form_submit_button("Tambah Barang"):
-                new_id = st.session_state.inventory['id'].max() + 1
-                new_data = {
-                    "id": new_id, "nama": nama, "stok_pcs": stok_dus * dus_ke_pcs, 
-                    "min_stok": min_s, "harga_modal": h_modal, "harga_jual": h_jual, 
-                    "dus_ke_pcs": dus_ke_pcs
-                }
-                st.session_state.inventory = pd.concat([st.session_state.inventory, pd.DataFrame([new_data])], ignore_index=True)
-                st.success(f"Berhasil input {stok_dus} Dus ({stok_dus * dus_ke_pcs} Pcs)")
+        name = st.text_input("Nama")
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
 
-# --- 3. KASIR (TRANSAKSI) ---
-elif menu == "Kasir (Transaksi)":
-    st.header("🛒 Kasir Sembako")
-    
-    col_kiri, col_kanan = st.columns([2, 1])
-    
-    with col_kiri:
-        search = st.text_input("🔍 Scan Barcode atau Cari Nama Barang")
-        items = st.session_state.inventory[st.session_state.inventory['nama'].str.contains(search, case=False)]
-        
-        st.dataframe(items[['id', 'nama', 'stok_pcs', 'harga_jual']], use_container_width=True)
-        
-        selected_id = st.number_input("Masukkan ID Barang", step=1, min_value=0)
-        qty = st.number_input("Jumlah Beli", min_value=1, value=1)
-        
-        if st.button("Tambah ke Keranjang"):
-            item_data = st.session_state.inventory[st.session_state.inventory['id'] == selected_id].iloc[0]
-            # Logika Harga Bertingkat (Grosir)
-            harga_final = item_data['harga_jual']
-            if qty >= 12: # Misal beli 1 lusin
-                harga_final -= 500
-                st.info("Harga Grosir Diaktifkan!")
-                
-            st.session_state.cart.append({
-                "id": selected_id, "nama": item_data['nama'], 
-                "qty": qty, "harga": harga_final, "subtotal": qty * harga_final
-            })
+        if st.button("Daftar"):
+            users = load_df("users")
 
-    with col_kanan:
-        st.subheader("Struk Belanja")
-        if st.session_state.cart:
-            cart_df = pd.DataFrame(st.session_state.cart)
-            st.table(cart_df[['nama', 'qty', 'subtotal']])
-            total = cart_df['subtotal'].sum()
-            st.markdown(f"### Total: Rp {total:,}")
-            
-            metode = st.selectbox("Metode Bayar", ["Tunai", "QRIS", "Kasbon/Utang"])
-            
-            if st.button("Selesaikan Transaksi"):
-                # Potong Stok Otomatis
-                for _, row in cart_df.iterrows():
-                    idx = st.session_state.inventory.index[st.session_state.inventory['id'] == row['id']][0]
-                    update_stok(idx, row['qty'], mode="kurang")
-                
-                st.session_state.cart = []
-                st.success("Transaksi Berhasil & Stok Terupdate!")
-                st.balloons()
+            if u in users['username'].values:
+                st.error("Username sudah ada")
+            elif not u or not p:
+                st.error("Harus isi semua")
+            else:
+                new = pd.DataFrame([[u, hash_pw(p), name, "student"]], columns=users.columns)
+                save_df(pd.concat([users, new]), "users")
+                st.success("Berhasil daftar")
+
+# =========================
+# TEACHER
+# =========================
+def teacher_dashboard():
+    st.sidebar.header(f"👨‍🏫 {st.session_state.user['name']}")
+    menu = st.sidebar.radio("Menu", ["Kelas", "Materi", "Monitoring"])
+
+    # ===== KELAS =====
+    if menu == "Kelas":
+        st.header("Manajemen Kelas")
+
+        with st.form("kelas"):
+            name = st.text_input("Nama")
+            desc = st.text_area("Deskripsi")
+            code = st.text_input("Kode")
+
+            if st.form_submit_button("Tambah"):
+                if not name:
+                    st.error("Nama wajib")
+                else:
+                    df = load_df("classes")
+                    new = pd.DataFrame({
+                        "id": [str(uuid.uuid4())[:8]],
+                        "name": [name],
+                        "desc": [desc],
+                        "code": [code]
+                    })
+                    save_df(pd.concat([df, new]), "classes")
+                    st.success("Berhasil")
+                    st.rerun()
+
+        df = load_df("classes")
+        st.dataframe(df)
+
+    # ===== MATERI =====
+    elif menu == "Materi":
+        st.header("Materi")
+
+        classes = load_df("classes")
+        if classes.empty:
+            st.warning("Buat kelas dulu")
+            return
+
+        class_map = {r['name']: r['id'] for _, r in classes.iterrows()}
+        selected = st.selectbox("Kelas", list(class_map.keys()))
+        cid = class_map[selected]
+
+        title = st.text_input("Judul")
+        order = st.number_input("Level", min_value=1)
+        content = st_quill()
+        passing = st.slider("Passing", 0, 100, 75)
+
+        # STATE
+        if "builder_q" not in st.session_state:
+            st.session_state.builder_q = []
+
+        # ===== SOAL =====
+        st.subheader("Soal")
+
+        with st.form("soal"):
+            q = st.text_input("Pertanyaan")
+            a = st.text_input("A")
+            b = st.text_input("B")
+            c = st.text_input("C")
+            d = st.text_input("D")
+            ans = st.selectbox("Jawaban", ["A","B","C","D"])
+
+            if st.form_submit_button("Tambah"):
+                if not all([q,a,b,c,d]):
+                    st.error("Lengkapi")
+                else:
+                    st.session_state.builder_q.append({
+                        "question": q,
+                        "options": {"A":a,"B":b,"C":c,"D":d},
+                        "answer": ans
+                    })
+                    st.rerun()
+
+        for i, soal in enumerate(st.session_state.builder_q):
+            st.write(f"{i+1}. {soal['question']} ({soal['answer']})")
+
+        if st.button("Simpan Materi"):
+            if not title or not st.session_state.builder_q:
+                st.error("Isi lengkap")
+            else:
+                df = load_df("materials")
+                new = pd.DataFrame([[
+                    str(uuid.uuid4())[:8],
+                    cid,
+                    order,
+                    title,
+                    content,
+                    json.dumps(st.session_state.builder_q),
+                    passing
+                ]], columns=df.columns)
+
+                save_df(pd.concat([df, new]), "materials")
+                st.session_state.builder_q = []
+                st.success("Tersimpan")
+                st.rerun()
+
+    # ===== MONITORING =====
+    elif menu == "Monitoring":
+        df = load_df("progress")
+        st.dataframe(df)
+
+        if not df.empty:
+            st.metric("User", df['username'].nunique())
+            st.metric("Rata-rata", int(df['score'].mean()))
+
+# =========================
+# STUDENT
+# =========================
+def student_dashboard():
+    u = st.session_state.user['username']
+    st.sidebar.header(f"🎓 {st.session_state.user['name']}")
+
+    classes = load_df("classes")
+    enroll = load_df("enrollments")
+
+    my = enroll[enroll['username']==u]['class_id']
+    classes = classes[classes['id'].isin(my)]
+
+    if classes.empty:
+        st.title("Gabung Kelas")
+        code = st.text_input("Kode")
+
+        if st.button("Gabung"):
+            allc = load_df("classes")
+            c = allc[allc['code']==code]
+
+            if not c.empty:
+                cid = c.iloc[0]['id']
+                new = pd.DataFrame([[u, cid]], columns=["username","class_id"])
+                save_df(pd.concat([enroll, new]), "enrollments")
+                st.success("Masuk kelas")
+                st.rerun()
+            else:
+                st.error("Kode salah")
+        return
+
+    class_map = {r['name']: r['id'] for _, r in classes.iterrows()}
+    selected = st.selectbox("Kelas", list(class_map.keys()))
+    cid = class_map[selected]
+
+    mats = load_df("materials")
+    mats = mats[mats['class_id']==cid]
+    mats = mats.sort_values("order").reset_index(drop=True)
+
+    progs = load_df("progress")
+    user_prog = progs[(progs['username']==u)&(progs['class_id']==cid)]
+
+    status_map = dict(zip(user_prog['order'], user_prog['status']))
+
+    st.title(selected)
+
+    # Progress bar
+    if not mats.empty:
+        progress = len(user_prog[user_prog['status']=="LULUS"]) / len(mats)
+        st.progress(progress)
+
+    # LIST
+    for i in range(len(mats)):
+        row = mats.iloc[i]
+        order = row['order']
+
+        if i == 0:
+            unlocked = True
         else:
-            st.write("Keranjang kosong")
+            prev = mats.iloc[i-1]['order']
+            unlocked = status_map.get(prev) == "LULUS"
 
-# --- 4. LABA RUGI REAL-TIME ---
-elif menu == "Laporan Laba Rugi":
-    st.header("📈 Laporan Keuangan")
-    # Logika sederhana: Nilai Aset vs Potensi Margin
-    inv = st.session_state.inventory
-    total_modal = (inv['stok_pcs'] * inv['harga_modal']).sum()
-    total_potensi_jual = (inv['stok_pcs'] * inv['harga_jual']).sum()
-    margin = total_potensi_jual - total_modal
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Modal Aset", f"Rp {total_modal:,}")
-    c2.metric("Potensi Omzet", f"Rp {total_potensi_jual:,}")
-    c3.metric("Estimasi Laba", f"Rp {margin:,}", delta=f"{(margin/total_modal)*100:.1f}%")
+        if st.button(f"{'🔓' if unlocked else '🔒'} Level {order} - {row['title']}",
+                     disabled=not unlocked):
+            st.session_state.selected = row.to_dict()
+
+    # DETAIL
+    if "selected" in st.session_state:
+        item = st.session_state.selected
+
+        st.header(item['title'])
+        st.markdown(item['content'], unsafe_allow_html=True)
+
+        questions = json.loads(item['questions'])
+
+        with st.form("quiz"):
+            benar = 0
+            answers = {}
+
+            for i, q in enumerate(questions):
+                answers[i] = st.radio(q['question'], ["A","B","C","D"], key=i)
+
+            if st.form_submit_button("Submit"):
+                for i, q in enumerate(questions):
+                    if answers[i] == q['answer']:
+                        benar += 1
+
+                score = int(benar/len(questions)*100)
+                status = "LULUS" if score >= item['passing_grade'] else "GAGAL"
+
+                df = load_df("progress")
+                df = df[~(
+                    (df['username']==u)&
+                    (df['class_id']==cid)&
+                    (df['order']==item['order'])
+                )]
+
+                new = pd.DataFrame([[u,cid,item['order'],score,status]],
+                                   columns=df.columns)
+
+                save_df(pd.concat([df,new]), "progress")
+
+                st.success(f"{status} ({score}%)")
+                st.rerun()
+
+# =========================
+# MAIN
+# =========================
+init_db()
+
+if "user" not in st.session_state:
+    login_page()
+else:
+    if st.sidebar.button("Logout"):
+        st.session_state.clear()
+        st.rerun()
+
+    if st.session_state.user['role']=="teacher":
+        teacher_dashboard()
+    else:
+        student_dashboard()

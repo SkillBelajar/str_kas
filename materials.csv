@@ -1,0 +1,5 @@
+id,class_id,order,title,content,passing_grade,questions
+85dd12be,48569758,1,Materi 1,"Matrri 1
+","[{""question"": ""fsdfs"", ""options"": {""A"": ""bnae"", ""B"": ""nn"", ""C"": ""nn"", ""D"": ""nn""}, ""answer"": ""A""}, {""question"": ""faa"", ""options"": {""A"": ""asdnasn"", ""B"": ""dasn"", ""C"": ""Benar"", ""D"": ""fa""}, ""answer"": ""C""}]",75
+0b85e287,48569758,2,Materi 2,"dsad
+","[{""question"": ""dasdsa"", ""options"": {""A"": ""das"", ""B"": ""fas"", ""C"": ""fas"", ""D"": ""Benar""}, ""answer"": ""B""}]",75
