@@ -3,26 +3,22 @@ import couchdb
 import pandas as pd
 from datetime import datetime
 
-# --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="SekejapHadir", layout="wide", page_icon="⚡")
+# --- 1. KONFIGURASI & KONEKSI ---
+st.set_page_config(page_title="SekejapHadir Ultra", layout="wide", page_icon="⚡")
 
-# --- 2. KONEKSI COUCHDB ---
 COUCHDB_URL = 'http://admin:tik@172.27.0.1:5984/' 
 DB_NAME = 'elearning_db'
 
 def get_db():
     try:
         couch = couchdb.Server(COUCHDB_URL)
-        if DB_NAME in couch:
-            return couch[DB_NAME]
-        return couch.create(DB_NAME)
-    except Exception as e:
-        st.error(f"Gagal terhubung ke CouchDB: {e}")
+        return couch[DB_NAME] if DB_NAME in couch else couch.create(DB_NAME)
+    except:
         return None
 
 db = get_db()
 
-# --- 3. FUNGSI PEMBANTU (CRUD CORE) ---
+# --- 2. HELPER FUNCTIONS ---
 def query_docs(doc_type, extra_selector=None):
     if not db: return []
     selector = {'type': doc_type}
@@ -30,207 +26,211 @@ def query_docs(doc_type, extra_selector=None):
         selector.update(extra_selector)
     return [doc for doc in db.find({'selector': selector})]
 
-def delete_document(doc_id):
+def delete_doc(doc_id):
     try:
         doc = db.get(doc_id)
         db.delete(doc)
-        st.toast("Data berhasil dihapus!", icon="🗑️")
+        st.toast("Data terhapus!", icon="🗑️")
         st.rerun()
     except:
-        st.error("Gagal menghapus data.")
+        st.error("Gagal menghapus.")
 
-# --- 4. LOGIKA NAVIGASI ---
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = "🏠 Beranda"
+# --- 3. STATE & NAVIGATION ---
+if 'page' not in st.session_state:
+    st.session_state.page = "🏠 Beranda"
 
-def navigate_to(page):
-    st.session_state.current_page = page
+def nav(page_name):
+    st.session_state.page = page_name
     st.rerun()
 
-# --- 5. INTERFACE UTAMA ---
+# --- 4. UI LOGIC ---
 def main():
-    if not db: return
+    if not db:
+        st.error("⚠️ Koneksi CouchDB Gagal. Cek kredensial Anda.")
+        return
 
     st.sidebar.title("⚡ SekejapHadir")
-    menu_options = ["🏠 Beranda", "📝 Absensi", "📊 Rekap Kehadiran", "⚙️ Kelola Data"]
-    choice = st.sidebar.radio("Menu Utama", menu_options, index=menu_options.index(st.session_state.current_page))
+    menu = ["🏠 Beranda", "📝 Absensi", "📊 Rekap Sesi", "👤 Rekap Per Siswa", "⚙️ Kelola Data"]
+    choice = st.sidebar.radio("Menu", menu, index=menu.index(st.session_state.page))
 
-    # --- MENU: BERANDA ---
+    # --- TAB: BERANDA ---
     if choice == "🏠 Beranda":
-        st.header("Jadwal Mengajar Hari Ini")
-        tgl_pilih = st.date_input("Pilih Tanggal", datetime.now())
-        tgl_str = tgl_pilih.strftime("%Y-%m-%d")
-
-        schedules = query_docs("schedule", {"date": tgl_str})
+        st.header("Jadwal Mengajar")
+        tgl_str = st.date_input("Tanggal", datetime.now()).strftime("%Y-%m-%d")
+        schs = query_docs("schedule", {"date": tgl_str})
         
-        if not schedules:
-            st.info(f"Tidak ada jadwal mengajar pada {tgl_str}.")
-            st.caption("Tambahkan jadwal di menu 'Kelola Data' > 'Jadwal'")
+        if not schs:
+            st.info("Belum ada jadwal. Tambahkan di menu Kelola Data.")
         else:
-            for sch in schedules:
+            for s in schs:
                 with st.container(border=True):
                     c1, c2 = st.columns([3, 1])
-                    c1.markdown(f"### {sch['class_name']}\n**Mata Pelajaran:** {sch['subject_name']}")
-                    if c2.button("Mulai Absen", key=f"btn_sch_{sch['_id']}", use_container_width=True):
-                        st.session_state.active_sch = sch
-                        navigate_to("📝 Absensi")
+                    c1.markdown(f"### {s['class_name']}\n**Mapel:** {s['subject_name']}")
+                    if c2.button("Mulai Absen", key=f"go_{s['_id']}", use_container_width=True):
+                        st.session_state.active_sch = s
+                        nav("📝 Absensi")
 
-    # --- MENU: ABSENSI ---
+    # --- TAB: ABSENSI (FLOW 10 DETIK) ---
     elif choice == "📝 Absensi":
         st.header("Input Presensi")
-        active_sch = st.session_state.get('active_sch', None)
-
-        if not active_sch:
-            st.warning("Silakan pilih jadwal di menu Beranda terlebih dahulu.")
+        sch = st.session_state.get('active_sch')
+        
+        if not sch:
+            st.warning("Pilih jadwal di Beranda dulu!")
         else:
-            with st.container(border=True):
-                st.subheader(f"{active_sch['class_name']} — {active_sch['subject_name']}")
-                st.caption(f"Tanggal: {active_sch['date']}")
-
-            students = query_docs("student", {"class_id": active_sch['class_id']})
+            st.subheader(f"{sch['class_name']} - {sch['subject_name']} ({sch['date']})")
+            students = query_docs("student", {"class_id": sch['class_id']})
             
             if not students:
-                st.error("Belum ada siswa di kelas ini. Daftarkan siswa di menu Kelola Data.")
+                st.error("Siswa tidak ditemukan.")
             else:
-                attendance_results = {}
+                att_data = {}
                 st.divider()
-                # ALUR 10 DETIK: Default "Hadir", Guru hanya ganti yang bermasalah
                 for s in students:
                     col_n, col_s = st.columns([2, 1])
                     col_n.write(f"👤 **{s['name']}**")
+                    # TAMBAH STATUS IZIN
                     status = col_s.segmented_control(
-                        "Status", ["Hadir", "Telat", "Alfa"], 
+                        "Status", ["Hadir", "Izin", "Telat", "Alfa"], 
                         default="Hadir", key=f"att_{s['_id']}"
                     )
-                    attendance_results[s['_id']] = {"name": s['name'], "status": status}
+                    att_data[s['_id']] = {"name": s['name'], "status": status}
 
-                st.divider()
-                if st.button("💾 Simpan Kehadiran", type="primary", use_container_width=True):
+                if st.button("💾 Simpan Absensi", type="primary", use_container_width=True):
                     db.save({
                         "type": "attendance",
-                        "date": active_sch['date'],
-                        "class_id": active_sch['class_id'],
-                        "class_name": active_sch['class_name'],
-                        "subject_id": active_sch['subject_id'],
-                        "subject_name": active_sch['subject_name'],
-                        "records": attendance_results,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "date": sch['date'],
+                        "class_id": sch['class_id'], "class_name": sch['class_name'],
+                        "subject_id": sch['subject_id'], "subject_name": sch['subject_name'],
+                        "records": att_data
                     })
-                    st.success("Data berhasil disimpan!")
-                    st.balloons()
+                    st.success("Tersimpan!")
                     del st.session_state.active_sch
-                    st.button("Kembali ke Beranda", on_click=navigate_to, args=("🏠 Beranda",))
+                    st.balloons()
 
-    # --- MENU: REKAP KEHADIRAN ---
-    elif choice == "📊 Rekap Kehadiran":
-        st.header("Laporan Presensi")
+    # --- TAB: REKAP PER SESI ---
+    elif choice == "📊 Rekap Sesi":
+        st.header("Riwayat Absensi")
         all_att = query_docs("attendance")
+        for a in all_att:
+            with st.expander(f"📅 {a['date']} - {a['class_name']} ({a['subject_name']})"):
+                recs = a['records']
+                df = pd.DataFrame([{"Nama": v['name'], "Status": v['status']} for v in recs.values()])
+                st.table(df)
+                if st.button("Hapus Rekap", key=f"del_{a['_id']}"):
+                    delete_doc(a['_id'])
+
+    # --- TAB BARU: REKAP PER SISWA ---
+    elif choice == "👤 Rekap Per Siswa":
+        st.header("Akumulasi Kehadiran Siswa")
+        classes = query_docs("class")
+        c_opts = {c['name']: c['_id'] for c in classes}
         
-        if not all_att:
-            st.info("Belum ada data absensi yang tersimpan.")
-        else:
-            df_all = pd.DataFrame(all_att)
-            col_f1, col_f2 = st.columns(2)
-            f_kls = col_f1.multiselect("Filter Kelas", options=df_all['class_name'].unique())
-            f_mpl = col_f2.multiselect("Filter Mapel", options=df_all['subject_name'].unique())
-
-            filtered = df_all
-            if f_kls: filtered = filtered[filtered['class_name'].isin(f_kls)]
-            if f_mpl: filtered = filtered[filtered['subject_name'].isin(f_mpl)]
-
-            for _, row in filtered.iterrows():
-                with st.expander(f"📅 {row['date']} | {row['class_name']} - {row['subject_name']}"):
-                    recs = row['records']
-                    # Hitung Statistik
-                    stats = pd.Series([v['status'] for v in recs.values()]).value_counts()
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Hadir", stats.get("Hadir", 0))
-                    m2.metric("Telat", stats.get("Telat", 0))
-                    m3.metric("Alfa", stats.get("Alfa", 0))
+        sel_c = st.selectbox("Pilih Kelas untuk Laporan", options=list(c_opts.keys()))
+        
+        if sel_c:
+            # Ambil semua absensi untuk kelas ini
+            att_docs = query_docs("attendance", {"class_id": c_opts[sel_c]})
+            # Ambil semua daftar siswa di kelas ini
+            student_list = query_docs("student", {"class_id": c_opts[sel_c]})
+            
+            if not att_docs:
+                st.info("Belum ada data absensi tercatat untuk kelas ini.")
+            else:
+                # Inisialisasi hitungan
+                report = []
+                for s in student_list:
+                    s_id = s['_id']
+                    counts = {"Hadir": 0, "Izin": 0, "Telat": 0, "Alfa": 0}
                     
-                    # Detail Tabel
-                    df_det = pd.DataFrame([{"Nama": v['name'], "Status": v['status']} for v in recs.values()])
-                    st.table(df_det)
+                    # Iterasi setiap dokumen absensi
+                    for doc in att_docs:
+                        if s_id in doc['records']:
+                            stat = doc['records'][s_id]['status']
+                            counts[stat] += 1
                     
-                    if st.button("🗑️ Hapus Rekap Ini", key=f"del_att_{row['_id']}"):
-                        delete_document(row['_id'])
+                    report.append({
+                        "Nama Siswa": s['name'],
+                        "✅ Hadir": counts["Hadir"],
+                        "📩 Izin": counts["Izin"],
+                        "⏰ Telat": counts["Telat"],
+                        "❌ Alfa": counts["Alfa"],
+                        "📈 Total Sesi": sum(counts.values())
+                    })
+                
+                df_report = pd.DataFrame(report)
+                st.dataframe(df_report, use_container_width=True, hide_index=True)
+                
+                # Highlight Siswa Bermasalah (Alfa > 3)
+                st.subheader("🚩 Perhatian Khusus (Alfa > 3)")
+                warning_df = df_report[df_report["❌ Alfa"] > 3]
+                if not warning_df.empty:
+                    st.warning(f"Ada {len(warning_df)} siswa dengan tingkat ketidakhadiran tinggi.")
+                    st.table(warning_df)
+                else:
+                    st.success("Semua siswa masih dalam batas kehadiran aman.")
 
-    # --- MENU: KELOLA DATA (CRUD) ---
+    # --- TAB: KELOLA DATA (FULL CRUD) ---
     elif choice == "⚙️ Kelola Data":
         st.header("Manajemen Database")
-        t_kls, t_sw, t_mp, t_jd = st.tabs(["🏫 Kelas", "👥 Siswa", "📖 Mapel", "📅 Jadwal"])
+        t1, t2, t3, t4 = st.tabs(["🏫 Kelas", "👥 Siswa", "📖 Mapel", "📅 Jadwal"])
 
-        # TAB KELAS
-        with t_kls:
-            with st.form("form_kls"):
-                nk = st.text_input("Nama Kelas Baru")
+        # CRUD KELAS
+        with t1:
+            with st.form("f_k"):
+                nk = st.text_input("Nama Kelas")
                 if st.form_submit_button("Simpan"):
-                    db.save({"type": "class", "name": nk})
-                    st.rerun()
+                    db.save({"type": "class", "name": nk}); st.rerun()
             for c in query_docs("class"):
-                col1, col2 = st.columns([5, 1])
+                col1, col2 = st.columns([5,1])
                 col1.write(f"🏫 {c['name']}")
-                if col2.button("🗑️", key=f"d_k_{c['_id']}"): delete_document(c['_id'])
+                if col2.button("🗑️", key=f"dk_{c['_id']}"): delete_doc(c['_id'])
 
-        # TAB SISWA
-        with t_sw:
+        # CRUD SISWA
+        with t2:
             classes = query_docs("class")
             c_opts = {c['name']: c['_id'] for c in classes}
+            with st.form("f_s"):
+                ns = st.text_input("Nama Siswa")
+                sk = st.selectbox("Kelas", options=list(c_opts.keys()))
+                if st.form_submit_button("Simpan"):
+                    db.save({"type": "student", "name": ns, "class_id": c_opts[sk]}); st.rerun()
             if c_opts:
-                with st.form("form_sw"):
-                    ns = st.text_input("Nama Siswa")
-                    sk = st.selectbox("Pilih Kelas", options=list(c_opts.keys()))
-                    if st.form_submit_button("Tambah Siswa"):
-                        db.save({"type": "student", "name": ns, "class_id": c_opts[sk]})
-                        st.rerun()
-                
-                view_k = st.selectbox("Lihat Siswa di Kelas:", options=list(c_opts.keys()))
+                view_k = st.selectbox("Filter Kelas", options=list(c_opts.keys()))
                 for s in query_docs("student", {"class_id": c_opts[view_k]}):
-                    col1, col2 = st.columns([5, 1])
+                    col1, col2 = st.columns([5,1])
                     col1.write(f"👤 {s['name']}")
-                    if col2.button("🗑️", key=f"d_s_{s['_id']}"): delete_document(s['_id'])
+                    if col2.button("🗑️", key=f"ds_{s['_id']}"): delete_doc(s['_id'])
 
-        # TAB MAPEL
-        with t_mp:
-            if c_opts:
-                with st.form("form_mp"):
-                    nm = st.text_input("Nama Mata Pelajaran")
-                    mk = st.selectbox("Untuk Kelas", options=list(c_opts.keys()), key="sel_mk")
-                    if st.form_submit_button("Simpan Mapel"):
-                        db.save({"type": "subject", "name": nm, "class_id": c_opts[mk]})
-                        st.rerun()
-                
-                for m in query_docs("subject"):
-                    # Cari nama kelas dari ID
-                    kls_nama = next((k for k, v in c_opts.items() if v == m['class_id']), "Unknown")
-                    col1, col2 = st.columns([5, 1])
-                    col1.write(f"📖 {m['name']} — (Kelas: {kls_nama})")
-                    if col2.button("🗑️", key=f"d_m_{m['_id']}"): delete_document(m['_id'])
+        # CRUD MAPEL
+        with t3:
+            with st.form("f_m"):
+                nm = st.text_input("Nama Mapel")
+                mk = st.selectbox("Untuk Kelas", options=list(c_opts.keys()), key="mk")
+                if st.form_submit_button("Simpan"):
+                    db.save({"type": "subject", "name": nm, "class_id": c_opts[mk]}); st.rerun()
+            for m in query_docs("subject"):
+                st.write(f"📖 {m['name']} (ID Kelas: {m['class_id']})")
+                if st.button("Hapus", key=f"dm_{m['_id']}"): delete_doc(m['_id'])
 
-        # TAB JADWAL
-        with t_jd:
-            if c_opts:
-                col_jk, col_jt = st.columns(2)
-                sel_jk = col_jk.selectbox("Pilih Kelas", options=list(c_opts.keys()), key="sel_jk")
-                sel_jt = col_jt.date_input("Pilih Tanggal")
-                
-                # Filter mapel berdasarkan kelas yang dipilih
-                sub_list = query_docs("subject", {"class_id": c_opts[sel_jk]})
-                s_opts = {s['name']: s['_id'] for s in sub_list}
-                
-                if s_opts:
-                    sel_jm = st.selectbox("Pilih Mapel", options=list(s_opts.keys()))
-                    if st.button("➕ Tambahkan ke Jadwal", use_container_width=True):
-                        db.save({
-                            "type": "schedule",
-                            "date": sel_jt.strftime("%Y-%m-%d"),
-                            "class_id": c_opts[sel_jk], "class_name": sel_jk,
-                            "subject_id": s_opts[sel_jm], "subject_name": sel_jm
-                        })
-                        st.success("Jadwal Berhasil Ditambahkan!")
-                        st.rerun()
-                else:
-                    st.warning("Buat Mata Pelajaran dulu untuk kelas ini di tab 'Mapel'.")
+        # CRUD JADWAL
+        with t4:
+            with st.form("f_j"):
+                tj = st.date_input("Tanggal")
+                kj = st.selectbox("Kelas", options=list(c_opts.keys()), key="kj")
+                # Dinamis mapel
+                ms = query_docs("subject", {"class_id": c_opts[kj]})
+                mo = {m['name']: m['_id'] for m in ms}
+                mj = st.selectbox("Mapel", options=list(mo.keys()))
+                if st.form_submit_button("Buat Jadwal"):
+                    db.save({
+                        "type": "schedule", "date": tj.strftime("%Y-%m-%d"),
+                        "class_id": c_opts[kj], "class_name": kj,
+                        "subject_id": mo[mj], "subject_name": mj
+                    }); st.rerun()
+            for j in query_docs("schedule"):
+                st.write(f"📅 {j['date']} | {j['class_name']} - {j['subject_name']}")
+                if st.button("Hapus", key=f"dj_{j['_id']}"): delete_doc(j['_id'])
 
 if __name__ == "__main__":
     main()
